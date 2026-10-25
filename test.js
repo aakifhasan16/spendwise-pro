@@ -1,0 +1,25 @@
+process.env.DB_PATH = ':memory:';
+const assert = require('assert'), app = require('./server'), ml = require('./ml');
+(async () => {
+  const s = app.listen(0), base = 'http://localhost:' + s.address().port;
+  const call = async (m, u, b, t) => { const r = await fetch(base + u, { method: m, headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: 'Bearer ' + t } : {}) }, body: b ? JSON.stringify(b) : undefined }); return { s: r.status, d: await r.json() }; };
+  let r = await call('POST', '/api/register', { name: 'Test', email: 'a@b.com', password: 'secret1' }); assert.equal(r.s, 200); const t = r.d.token;
+  assert.equal((await call('POST', '/api/register', { name: 'T', email: 'a@b.com', password: 'secret1' })).s, 409);
+  assert.equal((await call('POST', '/api/login', { email: 'a@b.com', password: 'bad' })).s, 401);
+  assert.equal((await call('GET', '/api/expenses')).s, 401);
+  r = await call('POST', '/api/expenses', { title: 'Zomato biryani', amount: 350, date: '2026-10-01' }, t); assert.equal(r.d.category, 'Food');
+  assert.equal((await call('POST', '/api/expenses', { title: 'x', amount: -5, date: '2026-10-01' }, t)).s, 400);
+  await call('POST', '/api/seed-demo', null, t);
+  r = await call('GET', '/api/insights', t ? null : null, t); assert.ok(r.d.prediction.next > 0); assert.ok(r.d.anomalies.some(a => a.title.includes('biryani')));
+  console.log('prediction:', r.d.prediction.next, r.d.prediction.method, '| anomalies:', r.d.anomalies.length, '| tips:', r.d.tips);
+  assert.equal(ml.categorize(ml.train(), 'uber ride').category, 'Travel');
+  r = await call('GET', '/api/expenses', null, t); const id = r.d[0].id;
+  await call('DELETE', '/api/expenses/' + id, null, t); assert.equal((await call('GET', '/api/expenses', null, t)).d.length, r.d.length - 1);
+  r = await call('POST', '/api/goals', { name: 'New laptop', target: 50000, emoji: '💻' }, t); assert.equal(r.s, 200);
+  r = await call('GET', '/api/goals', null, t); r = await call('POST', '/api/goals/' + r.d[0].id + '/add', { amount: 5000 }, t); assert.equal(r.d.saved, 5000);
+  const today = new Date().getDate();
+  await call('POST', '/api/recurring', { title: 'Netflix', amount: 199, day: 1 }, t);
+  r = await call('GET', '/api/expenses', null, t); assert.ok(r.d.some(e => e.title === 'Netflix' && e.category === 'Entertainment'), 'recurring auto-added');
+  assert.equal((await call('GET', '/api/expenses', null, t)).d.filter(e => e.title === 'Netflix').length, 1);
+  console.log('ALL TESTS PASSED'); s.close(); process.exit(0);
+})().catch(e => { console.error('FAIL', e); process.exit(1); });
